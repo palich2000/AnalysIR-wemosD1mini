@@ -57,7 +57,7 @@ void space( uint16_t sLen);
 #define IR_Mod_PIN D6  //IR Learner //D7/D8 or D1/D2 also available via Jumpers on rear of PCB...consult guide
 #define IR_Tx_PIN D4  //Actually GPIO12 on ESP8266 (Dont use D4/GPIO2 as it often has the LED attached)
 #define IRLEARNER true //set true if you have an IR LEarner connected (TSMP58000), otherwise false
-#define ledPin    99   //make sure this pin is not used for any other function..used here as dummy
+#define irLedPin    99   //make sure this pin is not used for any other function..used here as dummy
 #define pinRxHIGH digitalRead(IR_Rx_PIN)
 #define maxPULSES 1024 //More RAM is available on this ESP8266
 //IMPORTANT never let actual LED pin go HIGH on D4...as this is also now the IR Tx Pin.
@@ -85,10 +85,11 @@ void space( uint16_t sLen);
 #include <ESP8266WiFiMulti.h>
 #include <ESP8266WebServer.h> //server used for Sending IR (data is sent from AnalysIR to ESP)
 #include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
 
-#define  ipAddressAnalysIR  "192.168.0.233" //enter the IP address of your AnalysIR PC here,only required  if using WiFi
-#define mySSID "YOURSSID" //enter your own here,only required  if using WiFi
-#define myWiFiPassword "YOURWIFIPASSWORD" //enter your own here,only required  if using WiFi
+#define  ipAddressAnalysIR  "192.168.0.99" //enter the IP address of your AnalysIR PC here,only required  if using WiFi
+#define mySSID "indebuurt1" //enter your own here,only required  if using WiFi
+#define myWiFiPassword "VnsqrtnrsddbrN" //enter your own here,only required  if using WiFi
 
 const int webServerPortAnalysIR = 9449;
 char webBuffer[4 * 1024]; //used to send POST request to AnalysIR Web Server
@@ -113,7 +114,7 @@ uint16_t countD = 0; // used as a pointer through the buffers for writing and re
 volatile uint8_t countM = 0; // used as a pointer through the buffers for writing and reading (modulated signal)
 uint32_t sum = 0; //used in calculating Modulation frequency
 
-uint8_t carrierFreq = 38000; //default
+uint32_t carrierFreq = 38000; //default
 uint8_t DUTY = 0xF0; //50% default
 uint32_t sigTime = 0; //used in mark & space functions to keep track of time
 
@@ -124,13 +125,13 @@ void setup() {
   //first disable WiFi as we are only using serial over USB
 
   Serial.begin(115200);//fixed at 115200 bps for all platforms
-  // delay(500);//to avoid potential conflict with boot-loader on some systems
+  delay(2000);//to avoid potential conflict with boot-loader on some systems
   //while(!Serial);
   txBuffer[4] = 13; //init ascii decimal value for CR in tx buffer
 
   pinMode(IR_Rx_PIN, INPUT_PULLUP);
   pinMode(IR_Mod_PIN, INPUT_PULLUP);
-  pinMode(ledPin, OUTPUT);
+  pinMode(irLedPin, OUTPUT);
 
   pinMode(IR_Tx_PIN, OUTPUT); //IR TX pin as output
   digitalWrite(IR_Tx_PIN, LOW); //turn off IR output initially
@@ -182,10 +183,32 @@ void setup() {
   webServer.on("/analysir.signal", []() {
     irWebSend();
   });//listen for requests from AnalysIR
+
+  webServer.on("/esp", HTTP_POST, [&]() {
+        HTTPUpdateResult ret = ESPhttpUpdate.update(webServer.arg("firmware"), "1.0.0");
+        Serial.printf("Update firmware to:%s", webServer.arg("firmware").c_str());
+        switch(ret) {
+        case HTTP_UPDATE_FAILED:
+            webServer.send (500, "text/json", "{\"result\":false,\"msg\":\"Update failed.\"}");
+            Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+            break;
+        case HTTP_UPDATE_NO_UPDATES:
+            webServer.send (304, "text/json", "{\"result\":true,\"msg\":\"Update not necessary.\"}");
+            Serial.println("Update not necessary.");
+            break;
+        case HTTP_UPDATE_OK:
+            webServer.send (200, "text/json", "{\"result\":true,\"msg\":\"Update OK.\"}");
+            Serial.println("Update OK. Rebooting....");
+            ESP.restart();
+            break;
+        }
+    });
+
   webServer.onNotFound ( handleNotFound ); //handle invalid requests.
 
   webServer.begin();
   Serial.println("!HTTP server started!");
+  ESPhttpUpdate.rebootOnUpdate(false);
 #else
   //  do nothing //
 #endif
@@ -544,7 +567,7 @@ void postSignalWiFi(void) {
           i++;
           sigLen += pulseIR[i];
         }
-        p += sprintf( p, "%lu,", sigLen);
+        p += sprintf( p, "%u,", sigLen);
       }
       else //space
       {
@@ -552,7 +575,7 @@ void postSignalWiFi(void) {
           i++;
           sigLen += pulseIR[i];
         }
-        p += sprintf( p, "-%lu,", sigLen);
+        p += sprintf( p, "-%u,", sigLen);
       }
 
       yield(); //avoid watchdog issues
@@ -659,7 +682,7 @@ void sendWebIR() { //retrieve timings from webBuffer, fill Tx buffer and send IR
 
   unsigned int sLen = signalIR.length();
 
-  for (int i = 0; i < signalIR.length(); i++) {
+  for (unsigned int i = 0; i < signalIR.length(); i++) {
     if (!signalIR[i]) break; //exit once we hit end of string (null char)
     //Serial.print(signalIR[i]);
   }
@@ -668,7 +691,7 @@ void sendWebIR() { //retrieve timings from webBuffer, fill Tx buffer and send IR
   //send signal
   countD = 0; //reset pointer
   //start at 1=1 to skip initial $
-  for (int i = 1; i < sLen; i++) { //iterate thru request contents
+  for (unsigned int i = 1; i < sLen; i++) { //iterate thru request contents
 
     uint8_t decChar = signalIR[i]; //get next char from request
     if (decChar == ';') { //termination char
